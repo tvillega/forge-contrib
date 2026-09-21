@@ -3,6 +3,7 @@ package core
 import (
 	"fmt"
 	"strings"
+	"time"
 )
 
 const (
@@ -75,6 +76,7 @@ func ExecuteCommand(cmd ParsedCommand, username string, issueNumber int, repoFul
 	}
 
 	if actionDesc != "" {
-		fmt.Printf("[%s]: %s in %s\n", username, actionDesc, repoFullName)
+		timestamp := time.Now().UTC().Format("2006-01-02 15:04:05 UTC")
+		fmt.Printf("[%s] [%s]: %s in %s\n", timestamp, username, actionDesc, repoFullName)
 	}
 }
