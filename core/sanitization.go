@@ -16,35 +16,35 @@ const (
 
 // ParseCommand pre-processes a raw string into a structured ParsedCommand.
 func ParseCommand(commandStr string) ParsedCommand {
-	if strings.HasPrefix(commandStr, addLabel) {
+	if after, ok := strings.CutPrefix(commandStr, addLabel); ok {
 		return ParsedCommand{
 			Type:  AddLabel,
-			Value: strings.TrimPrefix(commandStr, addLabel),
+			Value: after,
 		}
-	} else if strings.HasPrefix(commandStr, rmLabel) {
+	} else if after0, ok0 := strings.CutPrefix(commandStr, rmLabel); ok0 {
 		return ParsedCommand{
 			Type:  RmLabel,
-			Value: strings.TrimPrefix(commandStr, rmLabel),
+			Value: after0,
 		}
-	} else if strings.HasPrefix(commandStr, addMilestone) {
+	} else if after1, ok1 := strings.CutPrefix(commandStr, addMilestone); ok1 {
 		return ParsedCommand{
 			Type:  AddMilestone,
-			Value: strings.TrimPrefix(commandStr, addMilestone),
+			Value: after1,
 		}
-	} else if strings.HasPrefix(commandStr, rmMilestone) {
+	} else if after2, ok2 := strings.CutPrefix(commandStr, rmMilestone); ok2 {
 		return ParsedCommand{
 			Type:  RmMilestone,
-			Value: strings.TrimPrefix(commandStr, rmMilestone),
+			Value: after2,
 		}
-	} else if strings.HasPrefix(commandStr, selfAssign) {
+	} else if after3, ok3 := strings.CutPrefix(commandStr, selfAssign); ok3 {
 		return ParsedCommand{
 			Type:  SelfAssign,
-			Value: strings.TrimPrefix(commandStr, selfAssign),
+			Value: after3,
 		}
-	} else if strings.HasPrefix(commandStr, selfUnassign) {
+	} else if after4, ok4 := strings.CutPrefix(commandStr, selfUnassign); ok4 {
 		return ParsedCommand{
 			Type:  SelfUnassign,
-			Value: strings.TrimPrefix(commandStr, selfUnassign),
+			Value: after4,
 		}
 	}
 

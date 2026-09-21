@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 
 	"forge-contrib/core"
@@ -64,12 +65,7 @@ func parseList(val string) []string {
 }
 
 func contains(slice []string, val string) bool {
-	for _, item := range slice {
-		if item == val {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(slice, val)
 }
 
 func tryCatchAction(token, repoFullName string, issueNumber int, commandType core.CommandType, username, value string) bool {
@@ -127,7 +123,7 @@ func webhookHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var payload map[string]interface{}
+	var payload map[string]any
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		http.Error(w, "Bad request payload", http.StatusBadRequest)
 		return
@@ -139,7 +135,7 @@ func webhookHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	repo, ok := payload["repository"].(map[string]interface{})
+	repo, ok := payload["repository"].(map[string]any)
 	var repoFullName string
 	if ok {
 		repoFullName, _ = repo["full_name"].(string)
@@ -150,7 +146,7 @@ func webhookHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sender, _ := payload["sender"].(map[string]interface{})
+	sender, _ := payload["sender"].(map[string]any)
 	username, _ := sender["login"].(string)
 
 	if !contains(userWhitelist, username) {
@@ -158,20 +154,20 @@ func webhookHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	comment, _ := payload["comment"].(map[string]interface{})
+	comment, _ := payload["comment"].(map[string]any)
 	commentBody, _ := comment["body"].(string)
 	commentBody = strings.TrimSpace(commentBody)
 	commentLower := strings.ToLower(commentBody)
 	commentID := comment["id"]
 
-	installation, _ := payload["installation"].(map[string]interface{})
+	installation, _ := payload["installation"].(map[string]any)
 	// Handle dynamic JSON unmarshaled number types safely
 	installationID := int64(0)
 	if idVal, ok := installation["id"].(float64); ok {
 		installationID = int64(idVal)
 	}
 
-	issue, _ := payload["issue"].(map[string]interface{})
+	issue, _ := payload["issue"].(map[string]any)
 	issueNumber := 0
 	if numVal, ok := issue["number"].(float64); ok {
 		issueNumber = int(numVal)
@@ -212,12 +208,12 @@ func webhookHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func writeJSONStatus(w http.ResponseWriter, status string) {
-	w.Header().Set("Content-Type", godotenvKeyExistsContentType())
+	w.Header().Set("Content-Type", dotenvKeyExistsContentType())
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": status})
 }
 
-func godotenvKeyExistsContentType() string {
+func dotenvKeyExistsContentType() string {
 	return "application/json"
 }
 

@@ -4,12 +4,13 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 )
 
 // Helper function to execute HTTP requests with headers and optional JSON body
-func doRequest(method, url string, headers map[string]string, payload interface{}) (*http.Response, error) {
+func doRequest(method, url string, headers map[string]string, payload any) (*http.Response, error) {
 	var bodyReader *bytes.Reader
 	if payload != nil {
 		jsonBytes, err := json.Marshal(payload)
@@ -48,20 +49,30 @@ func AddReaction(url, token, reaction string) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func(Body io.ReadCloser) {
+		err := Body.Close()
+		if err != nil {
+
+		}
+	}(resp.Body)
 	return nil
 }
 
 // addOrCreateLabel internal helper
 func addOrCreateLabel(url string, headers map[string]string, value string) bool {
-	payload := map[string]interface{}{
+	payload := map[string]any{
 		"labels": []string{value},
 	}
 	resp, err := doRequest(http.MethodPost, url, headers, payload)
 	if err != nil {
 		return false
 	}
-	defer resp.Body.Close()
+	defer func(Body io.ReadCloser) {
+		err := Body.Close()
+		if err != nil {
+
+		}
+	}(resp.Body)
 	return resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusCreated
 }
 
@@ -72,7 +83,12 @@ func AddLabelAction(labelsURL string, headers map[string]string, value, baseURL 
 	if err != nil {
 		return false, err
 	}
-	defer resp.Body.Close()
+	defer func(Body io.ReadCloser) {
+		err := Body.Close()
+		if err != nil {
+
+		}
+	}(resp.Body)
 
 	if resp.StatusCode == http.StatusOK {
 		return addOrCreateLabel(labelsURL, headers, value), nil
@@ -87,7 +103,12 @@ func RmLabelAction(labelsURL string, headers map[string]string, value string) (b
 	if err != nil {
 		return false, err
 	}
-	defer resp.Body.Close()
+	defer func(Body io.ReadCloser) {
+		err := Body.Close()
+		if err != nil {
+
+		}
+	}(resp.Body)
 
 	return resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNoContent, nil
 }
@@ -98,18 +119,23 @@ func AddMilestoneAction(urlMilestone, urlIssue string, headers map[string]string
 	if err != nil {
 		return false, err
 	}
-	defer resp.Body.Close()
+	defer func(Body io.ReadCloser) {
+		err := Body.Close()
+		if err != nil {
+
+		}
+	}(resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
 		return false, nil
 	}
 
-	var milestones []map[string]interface{}
+	var milestones []map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&milestones); err != nil {
 		return false, err
 	}
 
-	var milestoneID interface{}
+	var milestoneID any
 	for _, m := range milestones {
 		title, ok := m["title"].(string)
 		if ok && strings.EqualFold(title, value) {
@@ -122,7 +148,7 @@ func AddMilestoneAction(urlMilestone, urlIssue string, headers map[string]string
 		return false, nil
 	}
 
-	payload := map[string]interface{}{"milestone": milestoneID}
+	payload := map[string]any{"milestone": milestoneID}
 	patchResp, err := doRequest(http.MethodPatch, urlIssue, headers, payload)
 	if err != nil {
 		return false, err
@@ -134,26 +160,36 @@ func AddMilestoneAction(urlMilestone, urlIssue string, headers map[string]string
 
 // RmMilestoneAction removes the milestone from an issue.
 func RmMilestoneAction(urlIssue string, headers map[string]string) (bool, error) {
-	payload := map[string]interface{}{"milestone": nil}
+	payload := map[string]any{"milestone": nil}
 	resp, err := doRequest(http.MethodPatch, urlIssue, headers, payload)
 	if err != nil {
 		return false, err
 	}
-	defer resp.Body.Close()
+	defer func(Body io.ReadCloser) {
+		err := Body.Close()
+		if err != nil {
+
+		}
+	}(resp.Body)
 
 	return resp.StatusCode == http.StatusOK, nil
 }
 
 // AssignSelfAction assigns an issue to the specified username.
 func AssignSelfAction(urlIssue string, headers map[string]string, username string) (bool, error) {
-	payload := map[string]interface{}{
+	payload := map[string]any{
 		"assignees": []string{username},
 	}
 	resp, err := doRequest(http.MethodPatch, urlIssue, headers, payload)
 	if err != nil {
 		return false, err
 	}
-	defer resp.Body.Close()
+	defer func(Body io.ReadCloser) {
+		err := Body.Close()
+		if err != nil {
+
+		}
+	}(resp.Body)
 
 	return resp.StatusCode == http.StatusOK, nil
 }
@@ -164,21 +200,26 @@ func UnassignSelfAction(urlIssue string, headers map[string]string, username str
 	if err != nil {
 		return false, err
 	}
-	defer resp.Body.Close()
+	defer func(Body io.ReadCloser) {
+		err := Body.Close()
+		if err != nil {
+
+		}
+	}(resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
 		return false, nil
 	}
 
-	var issueData map[string]interface{}
+	var issueData map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&issueData); err != nil {
 		return false, err
 	}
 
 	var currentAssignees []string
-	if assignees, ok := issueData["assignees"].([]interface{}); ok {
+	if assignees, ok := issueData["assignees"].([]any); ok {
 		for _, a := range assignees {
-			if assigneeMap, ok := a.(map[string]interface{}); ok {
+			if assigneeMap, ok := a.(map[string]any); ok {
 				if login, ok := assigneeMap["login"].(string); ok {
 					currentAssignees = append(currentAssignees, login)
 				}
@@ -201,20 +242,25 @@ func UnassignSelfAction(urlIssue string, headers map[string]string, username str
 		return true, nil // Already unassigned
 	}
 
-	payload := map[string]interface{}{
+	payload := map[string]any{
 		"assignees": updatedAssignees,
 	}
 	patchResp, err := doRequest(http.MethodPatch, urlIssue, headers, payload)
 	if err != nil {
 		return false, err
 	}
-	defer patchResp.Body.Close()
+	defer func(Body io.ReadCloser) {
+		err := Body.Close()
+		if err != nil {
+
+		}
+	}(patchResp.Body)
 
 	return patchResp.StatusCode == http.StatusOK, nil
 }
 
 // UpdateIssueState opens or closes a GitHub issue depending on the state ("open" or "closed").
-func UpdateIssueState(url, token, state string) (map[string]interface{}, error) {
+func UpdateIssueState(url, token, state string) (map[string]any, error) {
 	headers := map[string]string{
 		"Authorization": fmt.Sprintf("Bearer %s", token),
 		"Accept":        "application/vnd.github+json",
@@ -227,9 +273,14 @@ func UpdateIssueState(url, token, state string) (map[string]interface{}, error) 
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func(Body io.ReadCloser) {
+		err := Body.Close()
+		if err != nil {
 
-	var result map[string]interface{}
+		}
+	}(resp.Body)
+
+	var result map[string]any
 	_ = json.NewDecoder(resp.Body).Decode(&result)
 	return result, nil
 }

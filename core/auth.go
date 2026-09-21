@@ -68,7 +68,7 @@ func GetInstallationAccessToken(installationID int64, privateKeyPath, appID stri
 		return "", fmt.Errorf("failed to parse PEM block containing the private key")
 	}
 
-	var parsedKey interface{}
+	var parsedKey any
 	if parsed, err := x509.ParsePKCS1PrivateKey(block.Bytes); err == nil {
 		parsedKey = parsed
 	} else if parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes); err == nil {
@@ -110,7 +110,12 @@ func GetInstallationAccessToken(installationID int64, privateKeyPath, appID stri
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func(Body io.ReadCloser) {
+		err := Body.Close()
+		if err != nil {
+
+		}
+	}(resp.Body)
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		bodyBytes, _ := io.ReadAll(resp.Body)
