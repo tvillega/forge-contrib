@@ -55,7 +55,7 @@ func ParseCommand(commandStr string) ParsedCommand {
 }
 
 // ExecuteCommand prints information based on the parsed command type and action details.
-func ExecuteCommand(cmd ParsedCommand, username string, issueNumber int) {
+func ExecuteCommand(cmd ParsedCommand, username string, issueNumber int, repoFullName string) {
 	var actionDesc string
 	switch cmd.Type {
 	case AddLabel:
@@ -75,6 +75,6 @@ func ExecuteCommand(cmd ParsedCommand, username string, issueNumber int) {
 	}
 
 	if actionDesc != "" {
-		fmt.Printf("[%s]: %s\n", username, actionDesc)
+		fmt.Printf("[%s]: %s in %s\n", username, actionDesc, repoFullName)
 	}
 }
