@@ -10,9 +10,9 @@ const (
 	addLabel     = "add label "
 	rmLabel      = "rm label "
 	addMilestone = "add milestone "
-	rmMilestone  = "rm milestone "
-	selfAssign   = "self assign "
-	selfUnassign = "self unassign "
+	rmMilestone  = "rm milestone"
+	selfAssign   = "self assign"
+	selfUnassign = "self unassign"
 )
 
 // ParseCommand pre-processes a raw string into a structured ParsedCommand.

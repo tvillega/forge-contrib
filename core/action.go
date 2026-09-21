@@ -228,7 +228,7 @@ func UnassignSelfAction(urlIssue string, headers map[string]string, username str
 	}
 
 	// Filter out the username
-	var updatedAssignees []string
+	updatedAssignees := []string{} // If initiated as nil it will crash the API !!
 	found := false
 	for _, u := range currentAssignees {
 		if u == username {
