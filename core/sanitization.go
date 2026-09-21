@@ -54,22 +54,27 @@ func ParseCommand(commandStr string) ParsedCommand {
 	}
 }
 
-// ExecuteCommand prints information based on the parsed command type (matching Python's utility).
-func ExecuteCommand(cmd ParsedCommand) {
+// ExecuteCommand prints information based on the parsed command type and action details.
+func ExecuteCommand(cmd ParsedCommand, username string, issueNumber int) {
+	var actionDesc string
 	switch cmd.Type {
 	case AddLabel:
-		fmt.Printf("Adding label: %s\n", cmd.Value)
+		actionDesc = fmt.Sprintf("Add label %s to #%d", cmd.Value, issueNumber)
 	case RmLabel:
-		fmt.Printf("Removing label: %s\n", cmd.Value)
+		actionDesc = fmt.Sprintf("Remove label %s from #%d", cmd.Value, issueNumber)
 	case AddMilestone:
-		fmt.Printf("Adding milestone: %s\n", cmd.Value)
+		actionDesc = fmt.Sprintf("Add milestone %s to #%d", cmd.Value, issueNumber)
 	case RmMilestone:
-		fmt.Printf("Removing milestone: %s\n", cmd.Value)
+		actionDesc = fmt.Sprintf("Remove milestone from #%d", issueNumber)
 	case SelfAssign:
-		fmt.Printf("Self-assigning to: %s\n", cmd.Value)
+		actionDesc = fmt.Sprintf("Self-assign to #%d (%s)", issueNumber, cmd.Value)
 	case SelfUnassign:
-		fmt.Printf("Self-unassigning from: %s\n", cmd.Value)
+		actionDesc = fmt.Sprintf("Self-unassign from #%d (%s)", issueNumber, cmd.Value)
 	case Unknown:
-		fmt.Printf("Unknown command: %s\n", cmd.Value)
+		actionDesc = fmt.Sprintf("Unknown command: %s", cmd.Value)
+	}
+
+	if actionDesc != "" {
+		fmt.Printf("[%s]: %s\n", username, actionDesc)
 	}
 }

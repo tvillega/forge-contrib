@@ -190,6 +190,9 @@ func webhookHandler(w http.ResponseWriter, r *http.Request) {
 
 	if cmd.Type != core.Unknown {
 		success = tryCatchAction(token, repoFullName, issueNumber, cmd.Type, username, cmd.Value)
+		if success {
+			core.ExecuteCommand(cmd, username, issueNumber) // Passes the required context
+		}
 	}
 
 	reaction := thumbsDown
