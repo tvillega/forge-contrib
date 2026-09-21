@@ -158,7 +158,11 @@ func webhookHandler(w http.ResponseWriter, r *http.Request) {
 	commentBody, _ := comment["body"].(string)
 	commentBody = strings.TrimSpace(commentBody)
 	commentLower := strings.ToLower(commentBody)
-	commentID := comment["id"]
+
+	commentID := int64(0)
+	if idVal, ok := comment["id"].(float64); ok {
+		commentID = int64(idVal)
+	}
 
 	installation, _ := payload["installation"].(map[string]any)
 	// Handle dynamic JSON unmarshaled number types safely
@@ -200,7 +204,7 @@ func webhookHandler(w http.ResponseWriter, r *http.Request) {
 		reaction = thumbsUp
 	}
 
-	reactionURL := fmt.Sprintf("%s/%s/issues/comments/%v/reactions", apiURL, repoFullName, commentID)
+	reactionURL := fmt.Sprintf("%s/%s/issues/comments/%d/reactions", apiURL, repoFullName, commentID)
 	_ = core.AddReaction(reactionURL, token, reaction)
 
 	statusMsg := "failed command"
