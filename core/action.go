@@ -6,134 +6,230 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"time"
 )
 
-var httpClient = &http.Client{
-	Timeout: 10 * time.Second,
-}
-
-// AddReaction adds a reaction (+1 or -1) to the triggering comment.
-func AddReaction(url, token, reaction string) error {
-	payload := map[string]string{"content": reaction}
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("failed to marshal reaction payload: %w", err)
+// Helper function to execute HTTP requests with headers and optional JSON body
+func doRequest(method, url string, headers map[string]string, payload interface{}) (*http.Response, error) {
+	var bodyReader *bytes.Reader
+	if payload != nil {
+		jsonBytes, err := json.Marshal(payload)
+		if err != nil {
+			return nil, err
+		}
+		bodyReader = bytes.NewReader(jsonBytes)
+	} else {
+		bodyReader = bytes.NewReader([]byte{})
 	}
 
-	req, err := http.NewRequest(http.MethodPost, url, bytes.NewBuffer(body))
+	req, err := http.NewRequest(method, url, bodyReader)
 	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to execute request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	return nil
-}
-
-// AddLabel creates or adds a label to the issue/PR.
-func AddLabel(url string, headers map[string]string, value string) bool {
-	payload := map[string][]string{"labels": {value}}
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return false
-	}
-
-	req, err := http.NewRequest(http.MethodPost, url, bytes.NewBuffer(body))
-	if err != nil {
-		return false
+		return nil, err
 	}
 
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
-	req.Header.Set("Content-Type", "application/json")
+	if payload != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 
-	resp, err := httpClient.Do(req)
+	client := &http.Client{}
+	return client.Do(req)
+}
+
+// AddReaction adds a reaction (+1 or -1) to the triggering comment.
+func AddReaction(url, token, reaction string) error {
+	headers := map[string]string{
+		"Authorization": fmt.Sprintf("Bearer %s", token),
+		"Accept":        "application/vnd.github+json",
+	}
+	payload := map[string]string{"content": reaction}
+	resp, err := doRequest(http.MethodPost, url, headers, payload)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	return nil
+}
+
+// addOrCreateLabel internal helper
+func addOrCreateLabel(url string, headers map[string]string, value string) bool {
+	payload := map[string]interface{}{
+		"labels": []string{value},
+	}
+	resp, err := doRequest(http.MethodPost, url, headers, payload)
 	if err != nil {
 		return false
 	}
 	defer resp.Body.Close()
-
 	return resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusCreated
 }
 
-// Milestone represents a GitHub milestone object for parsing JSON.
-type Milestone struct {
-	Title  string `json:"title"`
-	Number int    `json:"number"`
+// AddLabelAction checks if label exists on the repo first, then adds it.
+func AddLabelAction(labelsURL string, headers map[string]string, value, baseURL string) (bool, error) {
+	labelCheckURL := fmt.Sprintf("%s/labels/%s", baseURL, value)
+	resp, err := doRequest(http.MethodGet, labelCheckURL, headers, nil)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusOK {
+		return addOrCreateLabel(labelsURL, headers, value), nil
+	}
+	return false, nil
 }
 
-// AddMilestone checks if a milestone exists by title and assigns it to the issue.
-func AddMilestone(urlMilestone, urlIssue string, headers map[string]string, value string) bool {
-	// 1. Fetch existing milestones
-	reqGet, err := http.NewRequest(http.MethodGet, urlMilestone, nil)
+// RmLabelAction removes a label from an issue.
+func RmLabelAction(labelsURL string, headers map[string]string, value string) (bool, error) {
+	removeURL := fmt.Sprintf("%s/%s", labelsURL, value)
+	resp, err := doRequest(http.MethodDelete, removeURL, headers, nil)
 	if err != nil {
-		return false
+		return false, err
+	}
+	defer resp.Body.Close()
+
+	return resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNoContent, nil
+}
+
+// AddMilestoneAction adds an existing milestone to an issue.
+func AddMilestoneAction(urlMilestone, urlIssue string, headers map[string]string, value string) (bool, error) {
+	resp, err := doRequest(http.MethodGet, urlMilestone, headers, nil)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return false, nil
 	}
 
-	for k, v := range headers {
-		reqGet.Header.Set(k, v)
+	var milestones []map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&milestones); err != nil {
+		return false, err
 	}
 
-	respGet, err := httpClient.Do(reqGet)
-	if err != nil || respGet.StatusCode != http.StatusOK {
-		if respGet != nil {
-			respGet.Body.Close()
-		}
-		return false
-	}
-	defer respGet.Body.Close()
-
-	var milestones []Milestone
-	if err := json.NewDecoder(respGet.Body).Decode(&milestones); err != nil {
-		return false
-	}
-
-	// 2. Find matching milestone ID (case-insensitive)
-	var milestoneID *int
+	var milestoneID interface{}
 	for _, m := range milestones {
-		if strings.EqualFold(m.Title, value) {
-			num := m.Number
-			milestoneID = &num
+		title, ok := m["title"].(string)
+		if ok && strings.EqualFold(title, value) {
+			milestoneID = m["number"]
 			break
 		}
 	}
 
 	if milestoneID == nil {
-		return false
+		return false, nil
 	}
 
-	// 3. Patch the issue with the milestone ID
-	payload := map[string]int{"milestone": *milestoneID}
-	body, err := json.Marshal(payload)
+	payload := map[string]interface{}{"milestone": milestoneID}
+	patchResp, err := doRequest(http.MethodPatch, urlIssue, headers, payload)
 	if err != nil {
-		return false
+		return false, err
 	}
+	defer patchResp.Body.Close()
 
-	reqPatch, err := http.NewRequest(http.MethodPatch, urlIssue, bytes.NewBuffer(body))
+	return patchResp.StatusCode == http.StatusOK, nil
+}
+
+// RmMilestoneAction removes the milestone from an issue.
+func RmMilestoneAction(urlIssue string, headers map[string]string) (bool, error) {
+	payload := map[string]interface{}{"milestone": nil}
+	resp, err := doRequest(http.MethodPatch, urlIssue, headers, payload)
 	if err != nil {
-		return false
+		return false, err
 	}
+	defer resp.Body.Close()
 
-	for k, v := range headers {
-		reqPatch.Header.Set(k, v)
+	return resp.StatusCode == http.StatusOK, nil
+}
+
+// AssignSelfAction assigns an issue to the specified username.
+func AssignSelfAction(urlIssue string, headers map[string]string, username string) (bool, error) {
+	payload := map[string]interface{}{
+		"assignees": []string{username},
 	}
-	reqPatch.Header.Set("Content-Type", "application/json")
-
-	respPatch, err := httpClient.Do(reqPatch)
+	resp, err := doRequest(http.MethodPatch, urlIssue, headers, payload)
 	if err != nil {
-		return false
+		return false, err
 	}
-	defer respPatch.Body.Close()
+	defer resp.Body.Close()
 
-	return respPatch.StatusCode == http.StatusOK
+	return resp.StatusCode == http.StatusOK, nil
+}
+
+// UnassignSelfAction removes the specified username from the issue's assignees.
+func UnassignSelfAction(urlIssue string, headers map[string]string, username string) (bool, error) {
+	resp, err := doRequest(http.MethodGet, urlIssue, headers, nil)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return false, nil
+	}
+
+	var issueData map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&issueData); err != nil {
+		return false, err
+	}
+
+	var currentAssignees []string
+	if assignees, ok := issueData["assignees"].([]interface{}); ok {
+		for _, a := range assignees {
+			if assigneeMap, ok := a.(map[string]interface{}); ok {
+				if login, ok := assigneeMap["login"].(string); ok {
+					currentAssignees = append(currentAssignees, login)
+				}
+			}
+		}
+	}
+
+	// Filter out the username
+	var updatedAssignees []string
+	found := false
+	for _, u := range currentAssignees {
+		if u == username {
+			found = true
+			continue
+		}
+		updatedAssignees = append(updatedAssignees, u)
+	}
+
+	if !found {
+		return true, nil // Already unassigned
+	}
+
+	payload := map[string]interface{}{
+		"assignees": updatedAssignees,
+	}
+	patchResp, err := doRequest(http.MethodPatch, urlIssue, headers, payload)
+	if err != nil {
+		return false, err
+	}
+	defer patchResp.Body.Close()
+
+	return patchResp.StatusCode == http.StatusOK, nil
+}
+
+// UpdateIssueState opens or closes a GitHub issue depending on the state ("open" or "closed").
+func UpdateIssueState(url, token, state string) (map[string]interface{}, error) {
+	headers := map[string]string{
+		"Authorization": fmt.Sprintf("Bearer %s", token),
+		"Accept":        "application/vnd.github+json",
+	}
+	if state == "" {
+		state = "closed"
+	}
+	payload := map[string]string{"state": state}
+	resp, err := doRequest(http.MethodPatch, url, headers, payload)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var result map[string]interface{}
+	_ = json.NewDecoder(resp.Body).Decode(&result)
+	return result, nil
 }

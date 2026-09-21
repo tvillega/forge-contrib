@@ -1,12 +1,16 @@
 package core
 
 import (
+	"bytes"
 	"crypto/hmac"
+	"crypto/rsa"
 	"crypto/sha256"
-	"crypto/subtle"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -15,90 +19,114 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-// AccessTokenResponse maps the JSON response from GitHub when requesting an installation token.
-type AccessTokenResponse struct {
-	Token string `json:"token"`
-}
-
-// VerifyGitHubSignature validates the X-Hub-Signature-256 header sent by GitHub.
-// Note: In Go, we pass the read body bytes explicitly since http.Request body can only be read once.
-func VerifyGitHubSignature(webhookSecret string, r *http.Request, bodyBytes []byte) bool {
+// VerifyGitHubSignature verifies the X-Hub-Signature-256 header from GitHub webhooks.
+func VerifyGitHubSignature(r *http.Request, webhookSecret string) bool {
 	signatureHeader := r.Header.Get("X-Hub-Signature-256")
-	if signatureHeader == "" {
+	if signatureHeader == "" || !strings.HasPrefix(signatureHeader, "sha256=") {
 		return false
 	}
 
-	parts := strings.SplitN(signatureHeader, "=", 2)
-	if len(parts) != 2 || parts[0] != "sha256" {
+	sigParts := strings.SplitN(signatureHeader, "=", 2)
+	if len(sigParts) != 2 {
 		return false
 	}
-	receivedSig := parts[1]
+	expectedMAC, err := hex.DecodeString(sigParts[1])
+	if err != nil {
+		return false
+	}
 
-	// Compute HMAC-SHA256
+	// Read body
+	bodyBytes, err := io.ReadAll(r.Body)
+	if err != nil {
+		return false
+	}
+	// Restore the io.ReadCloser so downstream handlers can read it if needed
+	r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+
 	mac := hmac.New(sha256.New, []byte(webhookSecret))
 	mac.Write(bodyBytes)
-	expectedMAC := mac.Sum(nil)
-	expectedSig := hex.EncodeToString(expectedMAC)
+	calculatedMAC := mac.Sum(nil)
 
-	// Constant-time comparison to prevent timing attacks
-	return subtle.ConstantTimeCompare([]byte(expectedSig), []byte(receivedSig)) == 1
+	return hmac.Equal(expectedMAC, calculatedMAC)
 }
 
-// GenerateJWT generates a JWT signed with RS256 for authenticating as the GitHub App.
-func GenerateJWT(privateKeyPath, appID string) (string, error) {
-	keyBytes, err := os.ReadFile(privateKeyPath)
+// GetInstallationAccessToken generates a JWT using the GitHub App's private key and App ID,
+// then exchanges it for an installation access token.
+func GetInstallationAccessToken(installationID int64, privateKeyPath, appID string) (string, error) {
+	if installationID == 0 || privateKeyPath == "" || appID == "" {
+		return "", fmt.Errorf("missing parameters for installation token generation")
+	}
+
+	// 1. Read private key file
+	privateKeyBytes, err := os.ReadFile(privateKeyPath)
 	if err != nil {
 		return "", fmt.Errorf("failed to read private key file: %w", err)
 	}
 
-	// Parse the RSA private key from PEM bytes
-	privateKey, err := jwt.ParseRSAPrivateKeyFromPEM(keyBytes)
-	if err != nil {
-		return "", fmt.Errorf("failed to parse RSA private key: %w", err)
+	block, _ := pem.Decode(privateKeyBytes)
+	if block == nil {
+		return "", fmt.Errorf("failed to parse PEM block containing the private key")
 	}
 
+	var parsedKey interface{}
+	if parsed, err := x509.ParsePKCS1PrivateKey(block.Bytes); err == nil {
+		parsedKey = parsed
+	} else if parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes); err == nil {
+		var ok bool
+		parsedKey, ok = parsed.(*rsa.PrivateKey)
+		if !ok {
+			return "", fmt.Errorf("not an RSA private key")
+		}
+	} else {
+		return "", fmt.Errorf("failed to parse private key: %w", err)
+	}
+
+	// 2. Create JWT token
 	now := time.Now()
-	claims := jwt.MapClaims{
-		"iat": now.Unix(),
-		"exp": now.Add(10 * time.Minute).Unix(), // JWT expires in 10 minutes
-		"iss": appID,
+	claims := jwt.RegisteredClaims{
+		IssuedAt:  jwt.NewNumericDate(now.Add(-60 * time.Second)), // clock drift leeway
+		ExpiresAt: jwt.NewNumericDate(now.Add(10 * time.Minute)),
+		Issuer:    appID,
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
-	return token.SignedString(privateKey)
-}
+	signedJWT, err := token.SignedString(parsedKey)
+	if err != nil {
+		return "", fmt.Errorf("failed to sign JWT: %w", err)
+	}
 
-// GetInstallationAccessToken obtains an installation access token for repository API requests.
-func GetInstallationAccessToken(installationID int64, privateKeyPath, appID string) (string, error) {
-	jwtToken, err := GenerateJWT(privateKeyPath, appID)
+	// 3. Request installation access token from GitHub API
+	tokenURL := fmt.Sprintf("https://api.github.com/app/installations/%d/access_tokens", installationID)
+	req, err := http.NewRequest(http.MethodPost, tokenURL, nil)
 	if err != nil {
 		return "", err
 	}
 
-	url := fmt.Sprintf("https://api.github.com/app/installations/%d/access_tokens", installationID)
-	req, err := http.NewRequest(http.MethodPost, url, nil)
-	if err != nil {
-		return "", err
-	}
-
-	req.Header.Set("Authorization", "Bearer "+jwtToken)
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", signedJWT))
 	req.Header.Set("Accept", "application/vnd.github+json")
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("failed to execute request for installation token: %w", err)
+		return "", err
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("github api returned non-success status: %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("failed to get installation access token, status %d: %s", resp.StatusCode, string(bodyBytes))
 	}
 
-	var result AccessTokenResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", fmt.Errorf("failed to decode installation token response: %w", err)
+	var tokenResp struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
+		return "", err
 	}
 
-	return result.Token, nil
+	if tokenResp.Token == "" {
+		return "", fmt.Errorf("received empty token from GitHub")
+	}
+
+	return tokenResp.Token, nil
 }

@@ -3,197 +3,227 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"forge-contrib/core"
-	"io"
 	"log"
 	"net/http"
 	"os"
 	"strings"
+
+	"forge-contrib/core"
+
+	"github.com/joho/godotenv"
 )
 
-// Constants and Configuration
-const (
-	ThumbsUp    = "+1"
-	ThumbsDown  = "-1"
-	ApiURL      = "https://api.github.com/repos"
-	BotBaseName = "arietta"
-	BotSuffix   = " " // could be called like `arietta, add label bug`
-	BotName     = BotBaseName + BotSuffix
-)
-
-var WhiteList = map[string]bool{
-	"tvillega": true,
-}
-
+// Configuration variables
 var (
-	appID          = os.Getenv("GITHUB_APP_ID")
-	privateKeyPath = os.Getenv("GITHUB_PRIVATE_KEY_PATH")
-	webhookSecret  = os.Getenv("GITHUB_WEBHOOK_SECRET")
-	port           = getEnvOrDefault("PORT", "5050")
+	appID          string
+	privateKeyPath string
+	webhookSecret  string
+	port           string
+	botName        string
+	userWhitelist  []string
+	repoWhitelist  []string
 )
 
-// JSON Payload Structs
-type WebhookPayload struct {
-	Action       string       `json:"action"`
-	Installation Installation `json:"installation"`
-	Repository   Repository   `json:"repository"`
-	Issue        Issue        `json:"issue"`
-	Comment      Comment      `json:"comment"`
-	Sender       Sender       `json:"sender"`
+const (
+	thumbsUp   = "+1"
+	thumbsDown = "-1"
+	apiURL     = "https://api.github.com/repos"
+)
+
+func init() {
+	// Load .env file if present
+	_ = godotenv.Load()
+
+	appID = os.Getenv("GITHUB_APP_ID")
+	privateKeyPath = os.Getenv("GITHUB_PRIVATE_KEY_PATH")
+	webhookSecret = os.Getenv("GITHUB_WEBHOOK_SECRET")
+	port = os.Getenv("PORT")
+	if port == "" {
+		port = "5050"
+	}
+
+	botName = os.Getenv("BOT_NAME")
+	if botName != "" {
+		botName += " "
+	}
+
+	userWhitelist = parseList(os.Getenv("USER_WHITELIST"))
+	repoWhitelist = parseList(os.Getenv("REPO_WHITELIST"))
 }
 
-type Installation struct {
-	ID int64 `json:"id"`
+func parseList(val string) []string {
+	if val == "" {
+		return []string{}
+	}
+	parts := strings.Split(val, ",")
+	var result []string
+	for _, p := range parts {
+		result = append(result, strings.TrimSpace(p))
+	}
+	return result
 }
 
-type Repository struct {
-	FullName string `json:"full_name"`
+func contains(slice []string, val string) bool {
+	for _, item := range slice {
+		if item == val {
+			return true
+		}
+	}
+	return false
 }
 
-type Issue struct {
-	Number int `json:"number"`
-}
-
-type Comment struct {
-	ID   int64  `json:"id"`
-	Body string `json:"body"`
-}
-
-type Sender struct {
-	Login string `json:"login"`
-}
-
-// tryCatchAction executes the specific command requested by the user.
-func tryCatchAction(token, repoFullName string, issueNumber int, commandType, value string) bool {
+func tryCatchAction(token, repoFullName string, issueNumber int, commandType core.CommandType, username, value string) bool {
 	headers := map[string]string{
-		"Authorization": "Bearer " + token,
+		"Authorization": fmt.Sprintf("Bearer %s", token),
 		"Accept":        "application/vnd.github+json",
 	}
-	baseURL := fmt.Sprintf("%s/%s", ApiURL, repoFullName)
+	baseURL := fmt.Sprintf("%s/%s", apiURL, repoFullName)
+	issueURL := fmt.Sprintf("%s/issues/%d", baseURL, issueNumber)
 
-	// Defer to catch any panics (analogous to Python's try-except)
 	defer func() {
 		if r := recover(); r != nil {
-			// Handled exception case
+			// Catch potential panics similar to Python's except Exception
 		}
 	}()
 
-	if commandType == "add label" {
-		core.AddLabel(fmt.Sprintf("%s/issues/%d/labels", baseURL, issueNumber), headers, value)
-	} else if commandType == "add milestone" {
-		core.AddMilestone(fmt.Sprintf("%s/milestones", baseURL), fmt.Sprintf("%s/issues/%d", baseURL, issueNumber), headers, value)
+	var success bool
+	var err error
+
+	switch commandType {
+	case core.AddLabel:
+		success, err = core.AddLabelAction(fmt.Sprintf("%s/labels", issueURL), headers, value, baseURL)
+	case core.RmLabel:
+		success, err = core.RmLabelAction(fmt.Sprintf("%s/labels", issueURL), headers, value)
+	case core.AddMilestone:
+		success, err = core.AddMilestoneAction(fmt.Sprintf("%s/milestones", baseURL), issueURL, headers, value)
+	case core.RmMilestone:
+		success, err = core.RmMilestoneAction(issueURL, headers)
+	case core.SelfAssign:
+		success, err = core.AssignSelfAction(issueURL, headers, username)
+	case core.SelfUnassign:
+		success, err = core.UnassignSelfAction(issueURL, headers, username)
+	default:
+		return false
 	}
 
-	return true
+	return err == nil && success
 }
 
-// webhook handles incoming GitHub event requests.
 func webhookHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	defer r.Body.Close()
 
-	// 1. Read body bytes once so we can verify the signature AND decode JSON
-	bodyBytes, err := io.ReadAll(r.Body)
-	if err != nil {
-		http.Error(w, "Failed to read request body", http.StatusBadRequest)
-		return
-	}
-
-	// 2. Fix the signature verification call with bodyBytes and handle failure
-	if !core.VerifyGitHubSignature(webhookSecret, r, bodyBytes) {
-		http.Error(w, "Signature mismatch", http.StatusForbidden)
+	// Verify GitHub signature
+	if !core.VerifyGitHubSignature(r, webhookSecret) {
+		http.Error(w, "Invalid signature", http.StatusUnauthorized)
 		return
 	}
 
 	event := r.Header.Get("X-GitHub-Event")
 	if event != "issue_comment" {
-		writeJSON(w, map[string]string{"status": "ignored event"}, http.StatusOK)
+		writeJSONStatus(w, "ignored event")
 		return
 	}
 
-	// 3. Decode the JSON from our saved bodyBytes instead of r.Body
-	var payload WebhookPayload
-	if err := json.Unmarshal(bodyBytes, &payload); err != nil {
-		writeJSON(w, map[string]string{"error": "invalid payload"}, http.StatusBadRequest)
+	var payload map[string]interface{}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		http.Error(w, "Bad request payload", http.StatusBadRequest)
 		return
 	}
 
-	if payload.Action != "created" {
-		writeJSON(w, map[string]string{"status": "ignored action"}, http.StatusOK)
+	action, _ := payload["action"].(string)
+	if action != "created" {
+		writeJSONStatus(w, "ignored action")
 		return
 	}
 
-	username := payload.Sender.Login
-	if !WhiteList[username] {
-		writeJSON(w, map[string]string{"status": "user not whitelisted"}, http.StatusOK)
+	repo, ok := payload["repository"].(map[string]interface{})
+	var repoFullName string
+	if ok {
+		repoFullName, _ = repo["full_name"].(string)
+	}
+
+	if !contains(repoWhitelist, repoFullName) {
+		writeJSONStatus(w, "repository not whitelisted")
 		return
 	}
 
-	commentBody := strings.TrimSpace(payload.Comment.Body)
+	sender, _ := payload["sender"].(map[string]interface{})
+	username, _ := sender["login"].(string)
+
+	if !contains(userWhitelist, username) {
+		writeJSONStatus(w, "user not whitelisted")
+		return
+	}
+
+	comment, _ := payload["comment"].(map[string]interface{})
+	commentBody, _ := comment["body"].(string)
+	commentBody = strings.TrimSpace(commentBody)
 	commentLower := strings.ToLower(commentBody)
-	commentID := payload.Comment.ID
+	commentID := comment["id"]
 
-	installationID := payload.Installation.ID
-	repoFullName := payload.Repository.FullName
-	issueNumber := payload.Issue.Number
+	installation, _ := payload["installation"].(map[string]interface{})
+	// Handle dynamic JSON unmarshaled number types safely
+	installationID := int64(0)
+	if idVal, ok := installation["id"].(float64); ok {
+		installationID = int64(idVal)
+	}
 
-	if !strings.HasPrefix(commentLower, BotName) {
-		writeJSON(w, map[string]string{"status": "not an arietta command"}, http.StatusOK)
+	issue, _ := payload["issue"].(map[string]interface{})
+	issueNumber := 0
+	if numVal, ok := issue["number"].(float64); ok {
+		issueNumber = int(numVal)
+	}
+
+	if botName != "" && !strings.HasPrefix(commentLower, strings.ToLower(botName)) {
+		writeJSONStatus(w, "not an arietta command")
 		return
 	}
 
-	commandStr := strings.TrimSpace(strings.TrimPrefix(commentBody, BotName))
-	token, _ := core.GetInstallationAccessToken(installationID, privateKeyPath, appID)
-	success := false
-
-	if after, ok := strings.CutPrefix(commandStr, "add label "); ok {
-		value := strings.TrimSpace(after)
-		success = tryCatchAction(token, repoFullName, issueNumber, "add label", value)
-	} else if after0, ok0 := strings.CutPrefix(commandStr, "add milestone "); ok0 {
-		value := strings.TrimSpace(after0)
-		success = tryCatchAction(token, repoFullName, issueNumber, "add milestone", value)
-	}
-
-	reaction := ThumbsDown
-	if success {
-		reaction = ThumbsUp
-	}
-
-	reactionURL := fmt.Sprintf("%s/%s/issues/comments/%d/reactions", ApiURL, repoFullName, commentID)
-	err = core.AddReaction(reactionURL, token, reaction)
+	commandStr := strings.TrimSpace(strings.TrimPrefix(commentBody, botName))
+	token, err := core.GetInstallationAccessToken(installationID, privateKeyPath, appID)
 	if err != nil {
+		writeJSONStatus(w, "failed to get access token")
 		return
 	}
+
+	success := false
+	cmd := core.ParseCommand(commandStr)
+
+	if cmd.Type != core.Unknown {
+		success = tryCatchAction(token, repoFullName, issueNumber, cmd.Type, username, cmd.Value)
+	}
+
+	reaction := thumbsDown
+	if success {
+		reaction = thumbsUp
+	}
+
+	reactionURL := fmt.Sprintf("%s/%s/issues/comments/%v/reactions", apiURL, repoFullName, commentID)
+	_ = core.AddReaction(reactionURL, token, reaction)
 
 	statusMsg := "failed command"
 	if success {
 		statusMsg = "success"
 	}
-	writeJSON(w, map[string]string{"status": statusMsg}, http.StatusOK)
+	writeJSONStatus(w, statusMsg)
 }
 
-func writeJSON(w http.ResponseWriter, data map[string]string, statusCode int) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(statusCode)
-	err := json.NewEncoder(w).Encode(data)
-	if err != nil {
-		return
-	}
+func writeJSONStatus(w http.ResponseWriter, status string) {
+	w.Header().Set("Content-Type", godotenvKeyExistsContentType())
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": status})
 }
 
-func getEnvOrDefault(key, fallback string) string {
-	if val := os.Getenv(key); val != "" {
-		return val
-	}
-	return fallback
+func godotenvKeyExistsContentType() string {
+	return "application/json"
 }
 
 func main() {
 	http.HandleFunc("/webhook", webhookHandler)
-	log.Printf("Server running on port %s...", port)
+	log.Printf("Server starting on port %s...", port)
 	if err := http.ListenAndServe(":"+port, nil); err != nil {
 		log.Fatalf("Server failed to start: %v", err)
 	}
