@@ -20,8 +20,7 @@ services:
     restart: unless-stopped
     user: node
     depends_on:
-      forge-contrib:
-        condition: service_healthy
+      - forge-contrib
     command:
       - npx
       - --yes

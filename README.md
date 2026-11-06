@@ -79,14 +79,14 @@ docker compose pull
 docker compose up -d
 ```
 
-Check that both services are running and the app is healthy:
+Check that both services are running:
 
 ```bash
 docker compose ps
 docker compose logs -f smee
 ```
 
-`smee` waits for the app healthcheck before it starts forwarding events.
+`smee` starts after the app container.
 
 ## 5. Use it
 
@@ -138,8 +138,8 @@ docker compose up -d
 - **`permission denied` reading the key** — run `chmod 644 private-key.pem`.
 - **SELinux blocks the bind mount** (Fedora/RHEL) — append `,z` to the key volume
   in `docker-compose.yml`: `./private-key.pem:/etc/arietta/private-key.pem:ro,z`.
-- **`smee` restarts because the app is unhealthy** — run `docker compose logs forge-contrib`.
-  The container listens on `PORT`; no host port is published by design.
+- **`smee` keeps restarting** — run `docker compose logs forge-contrib` and make
+  sure the app is listening on `PORT`. No host port is published by design.
 
 ## Publishing the image
 
