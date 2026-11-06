@@ -1,0 +1,34 @@
+services:
+  forge-contrib:
+    image: tvillega/forge-contrib:latest
+    restart: unless-stopped
+    environment:
+      PORT: ${PORT:-5050}
+      GITHUB_APP_ID: ${GITHUB_APP_ID:?set GITHUB_APP_ID in .env}
+      GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:?set GITHUB_WEBHOOK_SECRET in .env}
+      GITHUB_PRIVATE_KEY_PATH: /etc/arietta/private-key.pem
+      USER_WHITELIST: ${USER_WHITELIST:-}
+      REPO_WHITELIST: ${REPO_WHITELIST:-}
+      BOT_NAME: ${BOT_NAME:-}
+    volumes:
+      - ./private-key.pem:/etc/arietta/private-key.pem:ro
+    security_opt:
+      - no-new-privileges:true
+
+  smee:
+    image: node:22-alpine
+    restart: unless-stopped
+    user: node
+    depends_on:
+      forge-contrib:
+        condition: service_healthy
+    command:
+      - npx
+      - --yes
+      - smee-client@5.0.0
+      - --url
+      - ${SMEE_URL:?set SMEE_URL in .env (create a channel at https://smee.io)}
+      - --target
+      - http://forge-contrib:${PORT:-5050}/webhook
+    security_opt:
+      - no-new-privileges:true

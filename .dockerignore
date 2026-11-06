@@ -1,0 +1,11 @@
+.git
+.gitignore
+.idea
+.env
+private-key.pem
+node_modules
+action
+arietta-bot
+arietta-bot-alpine
+Dockerfile
+.dockerignore
